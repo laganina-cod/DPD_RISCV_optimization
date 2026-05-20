@@ -1,43 +1,56 @@
-import numpy as np
-
 def matmul_winograd(A, B, out_C=None):
-    n, m = A.shape
-    p = B.shape[1]
+    # Вместо .shape используем встроенный len()
+    # Работает и с объектами NumPy, и с обычными списками списков
+    n = len(A)
+    m = len(A[0])
+    p = len(B[0])
     d = m // 2
     
+    # Инициализация матрицы результата
     if out_C is None:
-        out_C = np.zeros((n, p), dtype=A.dtype)
+        out_C = [[0.0 for _ in range(p)] for _ in range(n)]
     else:
-        out_C.fill(0) # Очищаем буфер
+        # Если передан буфер (список списков), обнуляем его
+        for i in range(n):
+            for j in range(p):
+                out_C[i][j] = 0.0
 
-    # Инженерная оптимизация факторов: 
-    # Считаем их один раз и используем как read-only массивы
-    # row_factor = sum(A[i, 2k] * A[i, 2k+1])
-    # col_factor = sum(B[2k, j] * B[2k+1, j])
-    
-    # Векторизованный расчет факторов без лишних копий
-    row_f = np.sum(A[:, 0:2*d:2] * A[:, 1:2*d:2], axis=1)
-    col_f = np.sum(B[0:2*d:2, :] * B[1:2*d:2, :], axis=0)
-
-    # В основном цикле мы имитируем работу блоками
-    # На RISC-V здесь будет итерация по L1-кэшу
+    # 1. Предварительный расчет факторов строк (row_factors)
+    # row_f[i] = sum_{k=0}^{d-1} (A[i][2k] * A[i][2k+1])
+    row_f = [0.0] * n
     for i in range(n):
-        # Векторизованная сумма по k
-        # На языке С это будет: C[i,j] += (A[i, 2k] + B[2k+1, j]) * (A[i, 2k+1] + B[2k, j])
-        A_even = A[i, 0:2*d:2]
-        A_odd  = A[i, 1:2*d:2]
-        B_even = B[0:2*d:2, :]
-        B_odd  = B[1:2*d:2, :]
-        
-        # Инженерный трюк: вычисляем строку сразу для всех столбцов j
-        # Это минимизирует промахи по кэшу для строки A[i]
-        out_C[i, :] = np.sum((A_even[:, None] + B_odd) * (A_odd[:, None] + B_even), axis=0)
-        
-        # Финальная коррекция факторами
-        out_C[i, :] -= (row_f[i] + col_f)
+        s = 0.0
+        for k in range(d):
+            s += A[i][2*k] * A[i][2*k+1]
+        row_f[i] = s
 
+    # 2. Предварительный расчет факторов столбцов (col_factors)
+    # col_f[j] = sum_{k=0}^{d-1} (B[2k][j] * B[2k+1][j])
+    col_f = [0.0] * p
+    for j in range(p):
+        s = 0.0
+        for k in range(d):
+            s += B[2*k][j] * B[2*k+1][j]
+        col_f[j] = s
+
+    # 3. Основной цикл вычислений
+    for i in range(n):
+        for j in range(p):
+            # Базовое значение из суммы произведений по Винограду
+            # sum_{k=0}^{d-1} (A[i][2k] + B[2k+1][j]) * (A[i][2k+1] + B[2k][j])
+            val = 0.0
+            for k in range(d):
+                val += (A[i][2*k] + B[2*k+1][j]) * (A[i][2*k+1] + B[2*k][j])
+            
+            # Коррекция предвычисленными факторами
+            out_C[i][j] = val - row_f[i] - col_f[j]
+
+    # 4. Обработка нечетного размера (m % 2 != 0)
     if m % 2 == 1:
-        # Внешнее произведение (rank-1 update)
-        out_C += np.outer(A[:, -1], B[-1, :])
+        last_col_idx = m - 1
+        for i in range(n):
+            term = A[i][last_col_idx]
+            for j in range(p):
+                out_C[i][j] += term * B[last_col_idx][j]
 
     return out_C

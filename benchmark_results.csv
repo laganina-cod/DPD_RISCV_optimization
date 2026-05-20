@@ -1,0 +1,11 @@
+Solver,Scenario,EVM,ACLR,PAPR,Cond_A,Time_ms,Timestamp
+Perminov_HPC_Edition,narrow,5.7087,-37.79,11.24,2.94e+02,461.19,2026-05-20 23:34:57
+Perminov_HPC_Edition,wide,5.3134,-58.14,13.97,4.92e+02,947.8,2026-05-20 23:35:01
+Perminov_HPC_Edition,freqsel,3.5726,-62.68,13.62,5.19e+02,419.4,2026-05-20 23:35:04
+Perminov_HPC_Edition,lowfb,5.2316,-58.31,14.35,1.58e+03,2592.49,2026-05-20 23:35:09
+Perminov_HPC_Edition,realtime,5.6714,-36.69,9.58,2.10e+02,102.9,2026-05-20 23:35:09
+Perminov_HPC_Edition,narrow,4.7069,-45.06,11.09,3.25e+02,400.04,2026-05-20 23:35:46
+Perminov_HPC_Edition,wide,5.5789,-64.31,14.18,5.46e+02,935.99,2026-05-20 23:35:50
+Perminov_HPC_Edition,freqsel,3.5892,-71.6,14.0,5.23e+02,378.85,2026-05-20 23:35:52
+Perminov_HPC_Edition,lowfb,5.3015,-56.96,14.93,1.60e+03,2543.04,2026-05-20 23:35:57
+Perminov_HPC_Edition,realtime,5.8382,-41.29,9.9,1.46e+02,105.21,2026-05-20 23:35:57

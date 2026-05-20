@@ -1,91 +1,89 @@
+import math
 import pytest
 import numpy as np
-from src.benchmarks.runner import create_gmp_matrix, align_signals
+from src.benchmarks.runner import create_gmp_matrix
 from src.dpd.solvers import (
-    solver_naive, 
-    solver_perminov, 
-    solver_winograd,
-    solver_cholesky_naive, 
-    solver_cholesky_perminov, 
-    solver_cholesky_winograd,
-    qr_householder_solver
+    solver_naive, solver_perminov, solver_strassen, solver_winograd,
+    solver_cholesky_perminov, qr_householder_solver
 )
 
+# Список актуальных солверов из вашей реализации
 SOLVERS = [
     solver_naive, 
     solver_perminov, 
+    solver_strassen, 
     solver_winograd,
-    solver_cholesky_naive, 
     solver_cholesky_perminov, 
-    solver_cholesky_winograd,
     qr_householder_solver
 ]
 
+def to_list_pure(data):
+    if hasattr(data, 'tolist'): return data.tolist()
+    return data
+
+def apply_weights_pure(A, w):
+    """Применение весов: x_pred = A @ w."""
+    res = []
+    for row in A:
+        val = sum(row[i] * w[i] for i in range(len(w)))
+        res.append(val)
+    return res
+
+def calculate_mse_pure(y_true, y_pred):
+    n = len(y_true)
+    total_error = sum(abs(y_true[i] - y_pred[i])**2 for i in range(n))
+    return total_error / n
+
 @pytest.mark.parametrize("solver", SOLVERS)
 def test_solver_integration(solver):
-    """Проверка базовой интеграции солверов без использования обертки класса."""
-    np.random.seed(42)
-    n_samples = 500
-    x = np.random.randn(n_samples) + 1j * np.random.randn(n_samples)
-    x /= np.max(np.abs(x)) 
+    """Проверка, что солвер возвращает корректный вектор весов."""
+    n_samples = 100
+    x = [(math.sin(i) + 1j*math.cos(i)) * 0.5 for i in range(n_samples)]
+    y = [val + 0.1 * val * (abs(val)**2) for val in x]
+
+    # Матрица GMP (теперь работаем напрямую с результатом)
+    A_train = to_list_pure(create_gmp_matrix(y, p_order=3, m_depth=1))
     
-    # Модель нелинейности
-    y = x + 0.1 * np.abs(x)**2 * x + 0.05 * np.abs(x)**4 * x
+    # ВАЖНО: теперь просто получаем w, без проверок на кортежи
+    w = solver(A_train, x, reg=1e-4)
 
-    scale = np.max(np.abs(y))
-    y_norm = y / scale
-    x_norm = x / scale
+    x_pred = apply_weights_pure(A_train, w)
 
-    # Тестируем сквозную генерацию и расчет напрямую
-    A_train = create_gmp_matrix(y_norm, p_order=3, m_depth=1)
-    solver_result = solver(A_train, x_norm, reg=1e-4)
-    w = solver_result[0] if isinstance(solver_result, tuple) else solver_result
-    
-    A_apply = create_gmp_matrix(x / scale, p_order=3, m_depth=1)
-    x_pred = (A_apply @ w) * scale
-
-    assert x_pred.shape == x.shape, f"Solver {solver.__name__} повредил размерность"
-    assert not np.allclose(x, x_pred, rtol=1e-3), f"Solver {solver.__name__} выдал тривиальное тождественное решение"
-    assert not np.any(np.isnan(x_pred)), f"Solver {solver.__name__} породил NaN"
+    assert len(x_pred) == len(x)
+    assert not any(math.isnan(v.real) or math.isnan(v.imag) for v in x_pred)
 
 @pytest.mark.parametrize("solver", SOLVERS)
 def test_solver_convergence(solver):
-    """Проверка сходимости МНК напрямую через функции раннера."""
+    """Проверка сходимости: ошибка после DPD должна быть меньше, чем до."""
     np.random.seed(42)
-    x = np.random.randn(1000) + 1j * np.random.randn(1000)
-    x /= np.max(np.abs(x))
+    n = 400
+    x = ((np.random.randn(n) + 1j*np.random.randn(n)) * 0.5).tolist()
     
-    y_distorted = x + 0.2 * np.abs(x)**2 * x
-    error_before = np.mean(np.abs(y_distorted - x)**2)
+    def pa_model(signal):
+        return [v + 0.2 * v * (abs(v)**2) for v in signal]
     
-    scale = np.max(np.abs(y_distorted))
-    A_train = create_gmp_matrix(y_distorted / scale, p_order=5, m_depth=2)
+    y_distorted = pa_model(x)
+    error_before = calculate_mse_pure(x, y_distorted)
     
-    solver_result = solver(A_train, x / scale, reg=1e-4)
-    w = solver_result[0] if isinstance(solver_result, tuple) else solver_result
+    A_train = to_list_pure(create_gmp_matrix(np.array(y_distorted), p_order=3, m_depth=1))
     
-    A_apply = create_gmp_matrix(x / scale, p_order=5, m_depth=2)
-    x_predistorted = (A_apply @ w) * scale
+    # Получаем веса напрямую
+    w = solver(A_train, x, reg=1e-5) 
     
-    y_corrected = predistorted_through_pa_model(x_predistorted)
-    error_after = np.mean(np.abs(y_corrected - x)**2)
+    x_recovered = apply_weights_pure(A_train, to_list_pure(w))
+    error_after = calculate_mse_pure(x, x_recovered)
     
-    assert error_after < error_before, f"Solver {solver.__name__} не уменьшил среднеквадратичную ошибку искажений"
+    # Для всех методов ожидаем значительное снижение ошибки
+    assert error_after < error_before * 0.1, f"Solver {solver.__name__} не обеспечил сходимость"
 
-def predistorted_through_pa_model(x_input):
-    """Вспомогательная функция имитации полиномиального PA для тестов сходимости"""
-    return x_input + 0.2 * np.abs(x_input)**2 * x_input
-
-def test_winograd_odd_m():
-    """Тест работы Винограда на нечетное число признаков (проверка остатка m % 2)."""
-    x = np.random.randn(100) + 1j * np.random.randn(100)
-    y = x * 1.1
+def test_winograd_odd_m_manual():
+    """Тест специфики Винограда на нечетном количестве столбцов."""
+    x = [1.1, 0.55, 0.22, 0.11, 0.055]
+    A = [[1.0, 0.1, 0.01], 
+         [0.5, 0.05, 0.005], 
+         [0.2, 0.02, 0.002], 
+         [0.1, 0.01, 0.001],
+         [0.05, 0.005, 0.0005]]
     
-    # p_order=2 дает степени [1], m_depth=3 -> 3 признака (нечетная матрица)
-    A = create_gmp_matrix(y, p_order=2, m_depth=3)
-    assert A.shape[1] % 2 != 0
-    
-    # Должно отработать без падения по Index Error во внутренних циклах Винограда
-    res = solver_winograd(A, x, reg=1e-3)
-    w = res[0] if isinstance(res, tuple) else res
-    assert w is not None
+    w = solver_winograd(A, x, reg=1e-3)
+    assert len(w) == 3

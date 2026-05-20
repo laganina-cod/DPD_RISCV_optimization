@@ -1,37 +1,42 @@
-import numpy as np
+def matmul_perminov(A, B):
+    # 1. Размеры матриц
+    n, k, m = len(A), len(A[0]), len(B[0])
 
-def matmul_perminov(A, B, out_C=None):
-    """
-    Инженерная реализация метода Перминова с минимизацией аллокаций.
-    """
-    n, k = A.shape
-    m = B.shape[1]
-    
-    # 1. Подготовка выходного буфера
-    if out_C is None:
-        out_C = np.empty((n, m), dtype=A.dtype)
-        
-    # 2. Извлечение вещественных и мнимых частей без копирования (Views)
-    A_re, A_im = A.real, A.imag
-    B_re, B_im = B.real, B.imag
+    # 2. Предварительный расчет сумм (tA и tB)
+    tA = [[A[i][j].real + A[i][j].imag for j in range(k)] for i in range(n)]
+    tB = [[B[i][j].real + B[i][j].imag for j in range(m)] for i in range(k)]
 
-    # 3. Предвыделение временных буферов для промежуточных сумм
-    # На RISC-V это будут временные регистры или стек
-    tA = np.add(A_re, A_im)          # (ReA + ImA)
-    tB = np.add(B_re, B_im)          # (ReB + ImB)
+    # 3. Инициализация буферов для M1, M2, M3
+    M1 = [[0.0] * m for _ in range(n)]
+    M2 = [[0.0] * m for _ in range(n)]
+    M3 = [[0.0] * m for _ in range(n)]
 
-    # 4. Три вещественных матричных умножения (Ядро вычислений)
-    M1 = np.matmul(A_re, B_re)       # ReA * ReB
-    M2 = np.matmul(A_im, B_im)       # ImA * ImB
-    M3 = np.matmul(tA, tB)           # (ReA + ImA) * (ReB + ImB)
+    # 4. Ядро вычислений: три умножения внутри одного тройного цикла
+    # Используем порядок i -> l -> j для оптимального доступа к памяти
+    for i in range(n):
+        for l in range(k):
+            # Кэшируем значения из A и tA во внутреннем цикле
+            a_re = A[i][l].real
+            a_im = A[i][l].imag
+            a_sum = tA[i][l]
+            
+            for j in range(m):
+                # Доступ к элементам B
+                b_val = B[l][j]
+                b_re = b_val.real
+                b_im = b_val.imag
 
-    # 5. Сборка результата напрямую в компоненты out_C
-    # Re(C) = M1 - M2
-    np.subtract(M1, M2, out=out_C.real)
-    
-    # Im(C) = M3 - M1 - M2
-    # Используем последовательные операции, чтобы не создавать новые массивы
-    np.subtract(M3, M1, out=out_C.imag)
-    np.subtract(out_C.imag, M2, out=out_C.imag)
+                # Накапливаем M1, M2 и M3 одновременно
+                M1[i][j] += a_re * b_re
+                M2[i][j] += a_im * b_im
+                M3[i][j] += a_sum * tB[l][j]
 
-    return out_C
+    # 5. Сборка финальной комплексной матрицы
+    # Re = M1 - M2, Im = M3 - M1 - M2
+    return [
+        [
+            complex(M1[i][j] - M2[i][j], M3[i][j] - M1[i][j] - M2[i][j]) 
+            for j in range(m)
+        ] 
+        for i in range(n)
+    ]

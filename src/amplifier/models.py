@@ -1,32 +1,29 @@
 import numpy as np
 
-def rapp_pa(x, v_sat=1.0, p=2.0, gain_db=15, ampm_coeff=0.08):
+
+def power_amplifier_model(x, mode='AB', v_sat=1.0, p=2.0, gain_db=10.0, ampm_coeff=0.05, **kwargs):
+    x = np.asarray(x)
+    # 1. Защита от пустого входа (исправляет ValueError в np.convolve)
+    if x.size == 0:
+        return x
+    
     gain_lin = 10**(gain_db / 20)
     x_in = x * gain_lin
-    mag = np.abs(x_in)
-    am_am = 1.0 / (1.0 + (mag / v_sat)**(2 * p))**(1.0 / (2 * p))
-    am_pm = ampm_coeff * (mag / v_sat)**2
-    return x_in * am_am * np.exp(1j * am_pm)
 
-def feedback_path(y, delay_samples=4, snr_db=50):
-    p_sig = np.mean(np.abs(y)**2)
-    p_noise = p_sig / (10**(snr_db / 10))
-    noise = np.sqrt(p_noise/2) * (np.random.randn(*y.shape) + 1j*np.random.randn(*y.shape))
-    y_noisy = y + noise
-    if delay_samples > 0:
-        y_noisy = np.roll(y_noisy, delay_samples)
-    return y_noisy
+    # 2. Эмуляция памяти (FIR-фильтр)
+    mem_filter = np.array([1.0, 0.15 + 0.05j, 0.05])
+    
+    # Чтобы длина выхода была РАВНА длине входа, используем свертку 
+    # и берем только первые len(x) элементов (причинно-следственная связь)
+    x_mem = np.convolve(x_in, mem_filter, mode='full')[:len(x)]
 
-# Добавьте эти функции, чтобы убрать ImportError
-def power_amplifier_model(x, mode='AB', **kwargs):
-    """Обертка для совместимости"""
     if mode == 'AB':
-        return rapp_pa(x, **kwargs)
-    return x # Линейный режим
-
-def channel_emulation(signal, snr_db):
-    """Обертка для совместимости"""
-    sig_power = np.mean(np.abs(signal)**2)
-    noise_power = sig_power / (10**(snr_db / 10))
-    noise = np.sqrt(noise_power/2) * (np.random.randn(len(signal)) + 1j*np.random.randn(len(signal)))
-    return signal + noise
+        mag = np.abs(x_mem)
+        # AM-AM (Rapp)
+        am_am = 1.0 / (1.0 + (mag / v_sat)**(2 * p))**(1.0 / (2 * p))
+        # AM-PM
+        am_pm = ampm_coeff * (mag / v_sat)**2
+        return x_mem * am_am * np.exp(1j * am_pm)
+    
+    # Линейный режим (теперь тоже с учетом фильтра памяти и корректной длины)
+    return x_mem

@@ -1,54 +1,41 @@
-import numpy as np
-
 def matmul_naive(A, B):
     """
-    Наивное матричное умножение на Python, адаптированное под любые
-    размерности и типы векторов/матриц из DPD-раннера.
+    Чистая реализация умножения матриц/векторов без numpy.
+    Поддерживает: Matrix @ Matrix, Matrix @ Vector, Vector @ Matrix.
     """
-    # Гарантируем, что работаем с массивами NumPy
-    A_np = np.asarray(A, dtype=np.complex128)
-    B_np = np.asarray(B, dtype=np.complex128)
+    # 1. Определяем, является ли A вектором (1D)
+    is_a_1d = not isinstance(A[0], (list, tuple))
+    A_2d = [A] if is_a_1d else A
     
-    # Извлекаем реальные размерности с учетом того, 1D это или 2D
-    N = A_np.shape[0]
-    M = A_np.shape[1] if A_np.ndim > 1 else 1
-    
-    # Определяем размерности для B
-    if B_np.ndim == 1:
-        M_b = B_np.shape[0]
-        P = 1
+    n_a = len(A_2d)
+    m_a = len(A_2d[0])
+
+    # 2. Определяем, является ли B вектором (1D)
+    is_b_1d = not isinstance(B[0], (list, tuple))
+    if is_b_1d:
+        # Превращаем [1, 2] в [[1], [2]] (столбец)
+        B_2d = [[x] for x in B]
+        m_b, p_b = len(B), 1
     else:
-        M_b, P = B_np.shape
-        
-    # Проверка на согласованность размерностей (для отладки, если что-то пойдет не так)
-    if A_np.ndim > 1 and B_np.ndim > 1:
-        assert M == M_b, f"Размерности не совпадают: A={A_np.shape}, B={B_np.shape}"
-    elif A_np.ndim == 1 and B_np.ndim > 1:
-        assert N == M_b, f"Размерности не совпадают: 1D A={A_np.shape}, 2D B={B_np.shape}"
-        # Если А одномерный вектор-строка, то для корректного умножения N — это её длина (M)
-        M = N
-        N = 1
+        B_2d = B
+        m_b, p_b = len(B), len(B[0])
 
-    # Выделяем буфер под результат нужной формы
-    # Если на выходе должен быть вектор (P=1), делаем его плоским или матричным в зависимости от контекста
-    C_np = np.zeros((N, P), dtype=np.complex128)
+    if m_a != m_b:
+        raise ValueError(f"Inconsistent dimensions: A_cols {m_a} != B_rows {m_b}")
 
-    # Меняем форму представлений для удобства тройного цикла "в лоб"
-    A_2d = A_np.reshape(N, M)
-    B_2d = B_np.reshape(M_b, P)
+    # 3. Само умножение
+    result = [[0 for _ in range(p_b)] for _ in range(n_a)]
+    for i in range(n_a):
+        for j in range(p_b):
+            for k in range(m_a):
+                result[i][j] += A_2d[i][k] * B_2d[k][j]
 
-    # Честный наивный тройной цикл "в лоб" на чистом Python
-    for i in range(N):
-        for j in range(P):
-            sum_val = complex(0.0, 0.0)
-            for k in range(M):
-                sum_val += complex(A_2d[i, k]) * complex(B_2d[k, j])
-            C_np[i, j] = sum_val
-
-    # Возвращаем ту форму, которую ожидает DPD раннер
-    if B_np.ndim == 1 and C_np.shape[1] == 1:
-        return C_np.flatten()
-    if A_np.ndim == 1 and C_np.shape[0] == 1:
-        return C_np.flatten()
-        
-    return C_np
+    # 4. Возвращаем в ожидаемом формате
+    if is_a_1d and is_b_1d:
+        return result[0][0]  # Скаляр
+    if is_a_1d:
+        return result[0]     # Вектор-строка
+    if is_b_1d:
+        return [row[0] for row in result]  # Вектор-столбец (flatten)
+    
+    return result
