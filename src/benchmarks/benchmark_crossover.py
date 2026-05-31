@@ -196,7 +196,7 @@ def generate_training_data(cfg, train_len=4096):
 # ----------------------------------------------------------------------
 def run_crossover_benchmark():
     scenarios = get_predefined_scenarios()
-    train_len = 4096
+    train_len = 6144
     csv_file = 'crossover_results.csv'
     file_exists = os.path.isfile(csv_file)
 
@@ -207,8 +207,8 @@ def run_crossover_benchmark():
 
         # Сетка параметров: расширена для тестирования до ~120 признаков
         param_grid = []
-        for p in [3, 5, 7, 9, 11]:        # p_order (всегда берем нечетные порядки, как это принято)
-            for m in [2, 4, 6]:           # m_depth (добавляем бóльшую глубину памяти)
+        for p in [3, 5, 7]:        # p_order (всегда берем нечетные порядки, как это принято)
+            for m in [2, 3, 4]:           # m_depth (добавляем бóльшую глубину памяти)
                 for c in [0, 1, 2]:       # cross_depth
                     param_grid.append({'p_order': p, 'm_depth': m, 'cross_depth': c})
 
@@ -231,7 +231,7 @@ def run_crossover_benchmark():
                 reg = cfg.get('reg', 1e-6)
 
                 # Усреднение увеличено до 10 для сглаживания ОС-джиттера
-                n_repeats = 10
+                n_repeats = 5
                 for solver_name, solver_func in solvers.items():
                     # Warm-up (прогрев кеша) для честного замера
                     _ = solver_func(A_train, target, reg)
