@@ -19,7 +19,7 @@ from src.signals.metrics import calculate_evm, calculate_aclr, calculate_papr
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
 
-lib_name = 'libdpd.dll' if os.name == 'nt' else 'libdpd.so'
+lib_name = 'libdpd_riscv.dll' if os.name == 'nt' else 'libdpd_riscv.so'
 lib_path = os.path.join(project_root, lib_name)
 
 try:
@@ -69,10 +69,8 @@ lib.solve_qr_householder.argtypes = [
 # =====================================================================
 
 def align_signals_strictly(ref, meas):
-    """Стабилизированная версия синхронизации через нормализованную кросс-корреляцию."""
     ref_norm = (ref - np.mean(ref)) / (np.std(ref) + 1e-9)
     meas_norm = (meas - np.mean(meas)) / (np.std(meas) + 1e-9)
-    
     c = correlate(ref_norm, meas_norm, method='fft', mode='full')
     s = np.argmax(np.abs(c)) - (len(meas) - 1)
     return np.roll(meas, s)
@@ -119,49 +117,67 @@ def wrap_solver(c_func, solver_type):
         Ah_y = np.zeros(n_f, dtype=np.complex128)
         BT = np.zeros((n_f, n_s), dtype=np.complex128)
 
-        start_time = time.perf_counter()
-
+        # Выносим аллокации за пределы таймера для точного измерения работы С-кода
         if solver_type == 'Gauss_Naive':
             M = np.zeros((n_f, n_f + 1), dtype=np.complex128)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, M, BT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'Gauss_Perminov':
             M = np.zeros((n_f, n_f + 1), dtype=np.complex128)
             tA = np.zeros(n_f * n_s, dtype=np.float64)
             tBT = np.zeros(n_f * n_s, dtype=np.float64)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, M, tA, BT, tBT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'Gauss_Winograd':
             M = np.zeros((n_f, n_f + 1), dtype=np.complex128)
             rf = np.zeros(n_f, dtype=np.complex128)
             cf = np.zeros(n_f, dtype=np.complex128)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, M, rf, cf, BT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'Cholesky_Naive':
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, BT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'Cholesky_Perminov':
             tA = np.zeros(n_f * n_s, dtype=np.float64)
             tBT = np.zeros(n_f * n_s, dtype=np.float64)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, tA, BT, tBT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'Cholesky_Winograd':
             rf = np.zeros(n_f, dtype=np.complex128)
             cf = np.zeros(n_f, dtype=np.complex128)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, rf, cf, BT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'QR_Householder':
             R = np.zeros((n_s + n_f, n_f), dtype=np.complex128)
             y_ext = np.zeros(n_s + n_f, dtype=np.complex128)
             v = np.zeros(n_s + n_f, dtype=np.complex128)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, R, y_ext, v)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
 
-        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         return w_out, elapsed_ms
     return solver
 
 solvers = {
-    'Gauss_Naive':        wrap_solver(lib.solve_gauss_naive,          'Gauss_Naive'),
-    'Gauss_Perminov':     wrap_solver(lib.solve_gauss_perminov,       'Gauss_Perminov'),
-    'Gauss_Winograd':     wrap_solver(lib.solve_gauss_winograd,       'Gauss_Winograd'),
-    'Cholesky_Naive':     wrap_solver(lib.solve_cholesky_naive,       'Cholesky_Naive'),
-    'Cholesky_Perminov':  wrap_solver(lib.solve_cholesky_perminov,    'Cholesky_Perminov'),
-    'Cholesky_Winograd':  wrap_solver(lib.solve_cholesky_winograd,    'Cholesky_Winograd'),
-    'QR_Householder':     wrap_solver(lib.solve_qr_householder,       'QR_Householder')
+    'Gauss_Naive':        wrap_solver(lib.solve_gauss_naive,        'Gauss_Naive'),
+    'Gauss_Perminov':     wrap_solver(lib.solve_gauss_perminov,     'Gauss_Perminov'),
+    'Gauss_Winograd':     wrap_solver(lib.solve_gauss_winograd,     'Gauss_Winograd'),
+    'Cholesky_Naive':     wrap_solver(lib.solve_cholesky_naive,     'Cholesky_Naive'),
+    'Cholesky_Perminov':  wrap_solver(lib.solve_cholesky_perminov,  'Cholesky_Perminov'),
+    'Cholesky_Winograd':  wrap_solver(lib.solve_cholesky_winograd,  'Cholesky_Winograd'),
+    'QR_Householder':     wrap_solver(lib.solve_qr_householder,     'QR_Householder')
 }
 
 # =====================================================================

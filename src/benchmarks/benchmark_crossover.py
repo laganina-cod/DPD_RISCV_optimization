@@ -23,11 +23,12 @@ from src.signals.generation import simulate_ofdm_frame
 from src.signals.metrics import calculate_evm, calculate_aclr, calculate_papr
 
 # ----------------------------------------------------------------------
-# Загрузка C-библиотеки и обёртки (точь-в-точь как в исправленном runner.py)
+# Загрузка C-библиотеки и обёртки 
 # ----------------------------------------------------------------------
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
-lib_name = 'libdpd.dll' if os.name == 'nt' else 'libdpd.so'
+
+lib_name = 'libdpd_riscv.dll' if os.name == 'nt' else 'libdpd_riscv.so'
 lib_path = os.path.join(project_root, lib_name)
 lib = ctypes.CDLL(lib_path)
 
@@ -63,37 +64,57 @@ def wrap_solver(c_func, solver_type):
         Ah_y = np.zeros(n_f, dtype=np.complex128)
         BT = np.zeros((n_f, n_s), dtype=np.complex128)
 
-        start = time.perf_counter()
+        # Выносим аллокации за пределы таймера для точного измерения работы С-кода
         if solver_type == 'Gauss_Naive':
             M = np.zeros((n_f, n_f + 1), dtype=np.complex128)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, M, BT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'Gauss_Perminov':
             M = np.zeros((n_f, n_f + 1), dtype=np.complex128)
             tA = np.zeros(n_f * n_s, dtype=np.float64)
             tBT = np.zeros(n_f * n_s, dtype=np.float64)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, M, tA, BT, tBT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'Gauss_Winograd':
             M = np.zeros((n_f, n_f + 1), dtype=np.complex128)
             rf = np.zeros(n_f, dtype=np.complex128)
             cf = np.zeros(n_f, dtype=np.complex128)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, M, rf, cf, BT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'Cholesky_Naive':
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, BT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'Cholesky_Perminov':
             tA = np.zeros(n_f * n_s, dtype=np.float64)
             tBT = np.zeros(n_f * n_s, dtype=np.float64)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, tA, BT, tBT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'Cholesky_Winograd':
             rf = np.zeros(n_f, dtype=np.complex128)
             cf = np.zeros(n_f, dtype=np.complex128)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, Ah, Ah_A, Ah_y, rf, cf, BT)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
         elif solver_type == 'QR_Householder':
             R = np.zeros((n_s + n_f, n_f), dtype=np.complex128)
             y_ext = np.zeros(n_s + n_f, dtype=np.complex128)
             v = np.zeros(n_s + n_f, dtype=np.complex128)
+            start_time = time.perf_counter()
             c_func(n_s, n_f, A_c, y_c, ctypes.c_double(reg), w_out, R, y_ext, v)
-        elapsed = (time.perf_counter() - start) * 1000.0
-        return w_out, elapsed
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
+        return w_out, elapsed_ms
     return solver
 
 solvers = {
@@ -168,7 +189,6 @@ def generate_training_data(cfg, train_len=4096):
     # Целевой вектор
     target = x_target_norm[:train_len]
 
-    # Базовая матрица A_apply (полный сигнал) нам здесь не нужна, только обучающая
     return y_train_norm, target, fs, bw, x_os, x_target_norm, backoff, x_max, os_factor
 
 # ----------------------------------------------------------------------
@@ -185,17 +205,15 @@ def run_crossover_benchmark():
         if not file_exists:
             writer.writerow(['Scenario', 'Solver', 'n_features', 'n_samples', 'Time_ms', 'RelError', 'Timestamp'])
 
-        # Сетка параметров модели, дающая разное количество признаков
-        # Для каждого сценария будем варьировать p_order, m_depth, cross_depth
+        # Сетка параметров: расширена для тестирования до ~120 признаков
         param_grid = []
-        for p in range(2, 11, 2):        # p_order: 2,4,6,8,10
-            for m in range(1, 6):         # m_depth: 1..5
-                for c in [0, 1]:          # cross_depth: 0,1
+        for p in [3, 5, 7, 9, 11]:        # p_order (всегда берем нечетные порядки, как это принято)
+            for m in [2, 4, 6]:           # m_depth (добавляем бóльшую глубину памяти)
+                for c in [0, 1, 2]:       # cross_depth
                     param_grid.append({'p_order': p, 'm_depth': m, 'cross_depth': c})
 
         for scen_name, cfg in scenarios.items():
             print(f"\n=== Сценарий: {scen_name} ===")
-            # Генерируем данные один раз для этого сценария
             y_norm, target, fs, bw, x_os, x_target_norm, backoff, x_max, os_factor = generate_training_data(cfg, train_len)
 
             for params in param_grid:
@@ -203,25 +221,29 @@ def run_crossover_benchmark():
                 m_depth = params['m_depth']
                 cross_depth = params['cross_depth']
 
-                # Формируем обучающую матрицу
                 A_train = create_gmp_matrix(y_norm, p_order, m_depth, cross_depth)
                 n_samples, n_features = A_train.shape
-                if n_features < 2:
-                    continue  # слишком мало признаков
+                
+                # Защита от слишком маленьких или слишком огромных матриц
+                if n_features < 5: 
+                    continue  
 
                 reg = cfg.get('reg', 1e-6)
 
-                # Запускаем каждый солвер несколько раз для усреднения
-                # Для краткости делаем 3 повтора, можно увеличить
-                n_repeats = 3
+                # Усреднение увеличено до 10 для сглаживания ОС-джиттера
+                n_repeats = 10
                 for solver_name, solver_func in solvers.items():
+                    # Warm-up (прогрев кеша) для честного замера
+                    _ = solver_func(A_train, target, reg)
+                    
                     times = []
                     errors = []
                     for _ in range(n_repeats):
                         w, elapsed = solver_func(A_train, target, reg)
-                        # Вычисляем относительную ошибку решения
+                        
                         residual = A_train @ w - target
                         rel_err = np.linalg.norm(residual) / np.linalg.norm(target)
+                        
                         times.append(elapsed)
                         errors.append(rel_err)
 
