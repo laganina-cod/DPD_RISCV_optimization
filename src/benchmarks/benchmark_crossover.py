@@ -123,8 +123,7 @@ solvers = {
     'Gauss_Winograd':   wrap_solver(lib.solve_gauss_winograd,   'Gauss_Winograd'),
     'Cholesky_Naive':   wrap_solver(lib.solve_cholesky_naive,   'Cholesky_Naive'),
     'Cholesky_Perminov':wrap_solver(lib.solve_cholesky_perminov,'Cholesky_Perminov'),
-    'Cholesky_Winograd':wrap_solver(lib.solve_cholesky_winograd,'Cholesky_Winograd'),
-    'QR_Householder':   wrap_solver(lib.solve_qr_householder,   'QR_Householder')
+    'Cholesky_Winograd':wrap_solver(lib.solve_cholesky_winograd,'Cholesky_Winograd')
 }
 
 # ----------------------------------------------------------------------
@@ -196,7 +195,7 @@ def generate_training_data(cfg, train_len=4096):
 # ----------------------------------------------------------------------
 def run_crossover_benchmark():
     scenarios = get_predefined_scenarios()
-    train_len = 6144
+    train_len = 4096
     csv_file = 'crossover_results.csv'
     file_exists = os.path.isfile(csv_file)
 
@@ -207,8 +206,8 @@ def run_crossover_benchmark():
 
         # Сетка параметров: расширена для тестирования до ~120 признаков
         param_grid = []
-        for p in [3, 5, 7]:        # p_order (всегда берем нечетные порядки, как это принято)
-            for m in [2, 3, 4]:           # m_depth (добавляем бóльшую глубину памяти)
+        for p in [3, 5, 7, 9, 11]:        # p_order (всегда берем нечетные порядки, как это принято)
+            for m in [2, 3, 4, 5]:           # m_depth (добавляем бóльшую глубину памяти)
                 for c in [0, 1, 2]:       # cross_depth
                     param_grid.append({'p_order': p, 'm_depth': m, 'cross_depth': c})
 
