@@ -91,4 +91,4 @@ def analyze_and_visualize(file_path, target_scenario='narrow'):
 
 if __name__ == "__main__":
     # Вызываем функцию для конкретного сценария (можно поменять на другой при необходимости)
-    analyze_and_visualize('risc_v_results/crossover_results.csv', target_scenario='realtime')
+    analyze_and_visualize('risc_v_results/crossover_results.csv', target_scenario='narrow')

@@ -12,7 +12,7 @@
 #endif
 
 // =====================================================================
-// ЯДРА УМНОЖЕНИЯ
+// ЯДРА УМНОЖЕНИЯ (Остаются без изменений, работают на уровне блока)
 // =====================================================================
 
 void matmul_naive(int n, int m, int p, double complex *A, double complex *B, double complex *C, double complex *B_T) {
@@ -178,64 +178,133 @@ void cholesky_solve_inplace(int n, double complex *Ah_A, double complex *Ah_y, d
 }
 
 // =====================================================================
-// EXPORT API (7 РЕШАТЕЛЕЙ)
+// EXPORT API (МОДЕРНИЗИРОВАННЫЙ БЛОЧНЫЙ ТАЙЛИНГ)
 // =====================================================================
 
-#define PREP \
-    for(int i=0; i<n_s; i++) { \
+// Вспомогательный макрос локальной предобработки текущего блока
+#define PROCESS_BLOCK_PREP(b_start, curr_bs) \
+    for(int i=0; i<curr_bs; i++) { \
         _Pragma("GCC ivdep") \
-        for(int j=0; j<n_f; j++) Ah[IDX(j, i, n_s)] = conj(A[IDX(i, j, n_f)]); \
+        for(int j=0; j<n_f; j++) Ah[IDX(j, i, curr_bs)] = conj(A[IDX((b_start) + i, j, n_f)]); \
     } \
-    memset(Ah_y, 0, n_f * sizeof(double complex)); \
     for(int i=0; i<n_f; i++) { \
+        double complex sum_y = 0; \
         _Pragma("GCC ivdep") \
         _Pragma("GCC unroll 4") \
-        for(int j=0; j<n_s; j++) Ah_y[i] += Ah[IDX(i, j, n_s)] * y[j]; \
+        for(int j=0; j<curr_bs; j++) sum_y += Ah[IDX(i, j, curr_bs)] * y[(b_start) + j]; \
+        Ah_y[i] += sum_y; \
     }
 
-EXPORT void solve_gauss_naive(int n_s, int n_f, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double complex *BT) {
-    PREP 
-    matmul_naive(n_f, n_s, n_f, Ah, A, Ah_A, BT); 
+EXPORT void solve_gauss_naive(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double complex *BT) {
+    memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
+    memset(Ah_y, 0, n_f * sizeof(double complex));
+    double complex Ah_A_block[n_f * n_f];
+    
+    for (int b_start = 0; b_start < n_s; b_start += b_s) {
+        int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
+        PROCESS_BLOCK_PREP(b_start, curr_bs);
+        
+        matmul_naive(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, BT);
+        
+        #pragma GCC ivdep
+        for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
+    }
     for(int i=0; i<n_f; i++) Ah_A[IDX(i, i, n_f)] += reg; 
     gauss_solve_inplace(n_f, Ah_A, Ah_y, w, M);
 }
 
-EXPORT void solve_gauss_perminov(int n_s, int n_f, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double *tA, double complex *BT, double *tBT) {
-    PREP 
-    matmul_perminov(n_f, n_s, n_f, Ah, A, Ah_A, tA, BT, tBT); 
+EXPORT void solve_gauss_perminov(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double *tA, double complex *BT, double *tBT) {
+    memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
+    memset(Ah_y, 0, n_f * sizeof(double complex));
+    double complex Ah_A_block[n_f * n_f];
+    
+    for (int b_start = 0; b_start < n_s; b_start += b_s) {
+        int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
+        PROCESS_BLOCK_PREP(b_start, curr_bs);
+        
+        matmul_perminov(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, tA, BT, tBT);
+        
+        #pragma GCC ivdep
+        for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
+    }
     for(int i=0; i<n_f; i++) Ah_A[IDX(i, i, n_f)] += reg; 
     gauss_solve_inplace(n_f, Ah_A, Ah_y, w, M);
 }
 
-EXPORT void solve_gauss_winograd(int n_s, int n_f, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double complex *rf, double complex *cf, double complex *BT) {
-    PREP 
-    matmul_winograd(n_f, n_s, n_f, Ah, A, Ah_A, rf, cf, BT); 
+EXPORT void solve_gauss_winograd(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double complex *rf, double complex *cf, double complex *BT) {
+    memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
+    memset(Ah_y, 0, n_f * sizeof(double complex));
+    double complex Ah_A_block[n_f * n_f];
+    
+    for (int b_start = 0; b_start < n_s; b_start += b_s) {
+        int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
+        PROCESS_BLOCK_PREP(b_start, curr_bs);
+        
+        matmul_winograd(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, rf, cf, BT);
+        
+        #pragma GCC ivdep
+        for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
+    }
     for(int i=0; i<n_f; i++) Ah_A[IDX(i, i, n_f)] += reg; 
     gauss_solve_inplace(n_f, Ah_A, Ah_y, w, M);
 }
 
-EXPORT void solve_cholesky_naive(int n_s, int n_f, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *BT) {
-    PREP 
-    matmul_naive(n_f, n_s, n_f, Ah, A, Ah_A, BT); 
+EXPORT void solve_cholesky_naive(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *BT) {
+    memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
+    memset(Ah_y, 0, n_f * sizeof(double complex));
+    double complex Ah_A_block[n_f * n_f];
+    
+    for (int b_start = 0; b_start < n_s; b_start += b_s) {
+        int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
+        PROCESS_BLOCK_PREP(b_start, curr_bs);
+        
+        matmul_naive(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, BT);
+        
+        #pragma GCC ivdep
+        for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
+    }
     for(int i=0; i<n_f; i++) Ah_A[IDX(i, i, n_f)] += reg; 
     cholesky_solve_inplace(n_f, Ah_A, Ah_y, w);
 }
 
-EXPORT void solve_cholesky_perminov(int n_s, int n_f, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double *tA, double complex *BT, double *tBT) {
-    PREP 
-    matmul_perminov(n_f, n_s, n_f, Ah, A, Ah_A, tA, BT, tBT); 
+EXPORT void solve_cholesky_perminov(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double *tA, double complex *BT, double *tBT) {
+    memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
+    memset(Ah_y, 0, n_f * sizeof(double complex));
+    double complex Ah_A_block[n_f * n_f];
+    
+    for (int b_start = 0; b_start < n_s; b_start += b_s) {
+        int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
+        PROCESS_BLOCK_PREP(b_start, curr_bs);
+        
+        matmul_perminov(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, tA, BT, tBT);
+        
+        #pragma GCC ivdep
+        for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
+    }
     for(int i=0; i<n_f; i++) Ah_A[IDX(i, i, n_f)] += reg; 
     cholesky_solve_inplace(n_f, Ah_A, Ah_y, w);
 }
 
-EXPORT void solve_cholesky_winograd(int n_s, int n_f, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *rf, double complex *cf, double complex *BT) {
-    PREP 
-    matmul_winograd(n_f, n_s, n_f, Ah, A, Ah_A, rf, cf, BT); 
+EXPORT void solve_cholesky_winograd(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *rf, double complex *cf, double complex *BT) {
+    memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
+    memset(Ah_y, 0, n_f * sizeof(double complex));
+    double complex Ah_A_block[n_f * n_f];
+    
+    for (int b_start = 0; b_start < n_s; b_start += b_s) {
+        int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
+        PROCESS_BLOCK_PREP(b_start, curr_bs);
+        
+        matmul_winograd(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, rf, cf, BT);
+        
+        #pragma GCC ivdep
+        for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
+    }
     for(int i=0; i<n_f; i++) Ah_A[IDX(i, i, n_f)] += reg; 
     cholesky_solve_inplace(n_f, Ah_A, Ah_y, w);
 }
 
-EXPORT void solve_qr_householder(int n_s, int n_f, double complex *A, double complex *y, double reg, double complex *w, double complex *R, double complex *y_ext, double complex *v) {
+EXPORT void solve_qr_householder(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *R, double complex *y_ext, double complex *v) {
+    // (b_s игнорируется, так как QR требует целостной структуры для Householder-отражений)
     memset(R, 0, (n_s + n_f) * n_f * sizeof(double complex));
     
     for(int i=0; i<n_s; i++) { 
