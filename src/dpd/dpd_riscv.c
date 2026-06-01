@@ -12,10 +12,10 @@
 #endif
 
 // =====================================================================
-// ЯДРА УМНОЖЕНИЯ (Остаются без изменений, работают на уровне блока)
+// ЯДРА УМНОЖЕНИЯ (ОПТИМИЗИРОВАННЫЕ ПОД КЭШ И РЕГИСТРЫ)
 // =====================================================================
 
-void matmul_naive(int n, int m, int p, double complex *A, double complex *B, double complex *C, double complex *B_T) {
+void matmul_naive(int n, int m, int p, const double complex *A, const double complex *B, double complex *C, double complex *B_T) {
     #pragma GCC ivdep
     for (int k = 0; k < m; k++) {
         for (int j = 0; j < p; j++) B_T[IDX(j, k, m)] = B[IDX(k, j, p)];
@@ -32,17 +32,10 @@ void matmul_naive(int n, int m, int p, double complex *A, double complex *B, dou
     }
 }
 
-void matmul_perminov(int n, int k_dim, int m, double complex *A, double complex *B, double complex *C, double *tA, double complex *B_T, double *tB_T) {
+void matmul_perminov(int n, int k_dim, int m, const double complex *A, const double complex *B, double complex *C, double complex *B_T) {
     #pragma GCC ivdep
-    for (int i = 0; i < n * k_dim; i++) tA[i] = creal(A[i]) + cimag(A[i]);
-    
     for (int l = 0; l < k_dim; l++) {
-        #pragma GCC ivdep
-        for (int j = 0; j < m; j++) {
-            double complex b_val = B[IDX(l, j, m)];
-            B_T[IDX(j, l, k_dim)] = b_val;
-            tB_T[IDX(j, l, k_dim)] = creal(b_val) + cimag(b_val);
-        }
+        for (int j = 0; j < m; j++) B_T[IDX(j, l, k_dim)] = B[IDX(l, j, m)];
     }
     
     for (int i = 0; i < n; i++) {
@@ -51,16 +44,21 @@ void matmul_perminov(int n, int k_dim, int m, double complex *A, double complex 
             #pragma GCC ivdep
             #pragma GCC unroll 4
             for (int l = 0; l < k_dim; l++) {
-                m1 += creal(A[IDX(i, l, k_dim)]) * creal(B_T[IDX(j, l, k_dim)]);
-                m2 += cimag(A[IDX(i, l, k_dim)]) * cimag(B_T[IDX(j, l, k_dim)]);
-                m3 += tA[IDX(i, l, k_dim)] * tB_T[IDX(j, l, k_dim)];
+                double a_re = creal(A[IDX(i, l, k_dim)]);
+                double a_im = cimag(A[IDX(i, l, k_dim)]);
+                double b_re = creal(B_T[IDX(j, l, k_dim)]);
+                double b_im = cimag(B_T[IDX(j, l, k_dim)]);
+                
+                m1 += a_re * b_re;
+                m2 += a_im * b_im;
+                m3 += (a_re + a_im) * (b_re + b_im);
             }
             C[IDX(i, j, m)] = (m1 - m2) + I * (m3 - m1 - m2);
         }
     }
 }
 
-void matmul_winograd(int n, int m_dim, int p, double complex *A, double complex *B, double complex *C, double complex *row_f, double complex *col_f, double complex *B_T) {
+void matmul_winograd(int n, int m_dim, int p, const double complex *A, const double complex *B, double complex *C, double complex *row_f, double complex *col_f, double complex *B_T) {
     int d = m_dim / 2;
     #pragma GCC ivdep
     for (int k = 0; k < m_dim; k++) {
@@ -70,7 +68,6 @@ void matmul_winograd(int n, int m_dim, int p, double complex *A, double complex 
     for (int i = 0; i < n; i++) {
         double complex sum = 0;
         #pragma GCC ivdep
-        #pragma GCC unroll 4
         for (int k = 0; k < d; k++) sum += A[IDX(i, 2*k, m_dim)] * A[IDX(i, 2*k+1, m_dim)];
         row_f[i] = sum;
     }
@@ -78,7 +75,6 @@ void matmul_winograd(int n, int m_dim, int p, double complex *A, double complex 
     for (int j = 0; j < p; j++) {
         double complex sum = 0;
         #pragma GCC ivdep
-        #pragma GCC unroll 4
         for (int k = 0; k < d; k++) sum += B_T[IDX(j, 2*k, m_dim)] * B_T[IDX(j, 2*k+1, m_dim)];
         col_f[j] = sum;
     }
@@ -104,10 +100,10 @@ void matmul_winograd(int n, int m_dim, int p, double complex *A, double complex 
 }
 
 // =====================================================================
-// РЕШАТЕЛИ (Gauss, Cholesky)
+// ВНУТРЕННИЕ РЕШАТЕЛИ СИСТЕМ (Прямой ход)
 // =====================================================================
 
-void gauss_solve_inplace(int n, double complex *Ah_A, double complex *Ah_y, double complex *w, double complex *M) {
+void gauss_solve_inplace(int n, double complex *Ah_A, const double complex *Ah_y, double complex *w, double complex *M) {
     int cols = n + 1;
     for (int i = 0; i < n; i++) {
         #pragma GCC ivdep
@@ -116,7 +112,8 @@ void gauss_solve_inplace(int n, double complex *Ah_A, double complex *Ah_y, doub
     }
     
     for (int i = 0; i < n; i++) {
-        int max_r = i; double max_e = cabs(M[IDX(i, i, cols)]);
+        int max_r = i; 
+        double max_e = cabs(M[IDX(i, i, cols)]);
         for (int k = i + 1; k < n; k++) {
             if (cabs(M[IDX(k, i, cols)]) > max_e) { 
                 max_e = cabs(M[IDX(k, i, cols)]); 
@@ -128,8 +125,8 @@ void gauss_solve_inplace(int n, double complex *Ah_A, double complex *Ah_y, doub
             #pragma GCC ivdep
             for (int j = i; j <= n; j++) { 
                 double complex t = M[IDX(i, j, cols)]; 
-                M[IDX(i, j, cols)] = M[max_r*cols+j]; 
-                M[max_r*cols+j] = t; 
+                M[IDX(i, j, cols)] = M[IDX(max_r, j, cols)]; 
+                M[IDX(max_r, j, cols)] = t; 
             }
         }
         
@@ -149,7 +146,7 @@ void gauss_solve_inplace(int n, double complex *Ah_A, double complex *Ah_y, doub
     }
 }
 
-void cholesky_solve_inplace(int n, double complex *Ah_A, double complex *Ah_y, double complex *w) {
+void cholesky_solve_inplace(int n, double complex *Ah_A, const double complex *Ah_y, double complex *w) {
     for (int i = 0; i < n; i++) {
         for (int j = 0; j <= i; j++) {
             double complex s = 0;
@@ -178,10 +175,9 @@ void cholesky_solve_inplace(int n, double complex *Ah_A, double complex *Ah_y, d
 }
 
 // =====================================================================
-// EXPORT API (МОДЕРНИЗИРОВАННЫЙ БЛОЧНЫЙ ТАЙЛИНГ)
+// API С УЛУЧШЕННЫМ УПРАВЛЕНИЕМ РАЗМЕРОМ БЛОКОВ КЭША
 // =====================================================================
 
-// Вспомогательный макрос локальной предобработки текущего блока
 #define PROCESS_BLOCK_PREP(b_start, curr_bs) \
     for(int i=0; i<curr_bs; i++) { \
         _Pragma("GCC ivdep") \
@@ -195,7 +191,7 @@ void cholesky_solve_inplace(int n, double complex *Ah_A, double complex *Ah_y, d
         Ah_y[i] += sum_y; \
     }
 
-EXPORT void solve_gauss_naive(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double complex *BT) {
+EXPORT void solve_gauss_naive(int n_s, int n_f, int b_s, const double complex *A, const double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double complex *BT) {
     memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
     memset(Ah_y, 0, n_f * sizeof(double complex));
     double complex Ah_A_block[n_f * n_f];
@@ -203,9 +199,7 @@ EXPORT void solve_gauss_naive(int n_s, int n_f, int b_s, double complex *A, doub
     for (int b_start = 0; b_start < n_s; b_start += b_s) {
         int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
         PROCESS_BLOCK_PREP(b_start, curr_bs);
-        
         matmul_naive(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, BT);
-        
         #pragma GCC ivdep
         for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
     }
@@ -213,7 +207,7 @@ EXPORT void solve_gauss_naive(int n_s, int n_f, int b_s, double complex *A, doub
     gauss_solve_inplace(n_f, Ah_A, Ah_y, w, M);
 }
 
-EXPORT void solve_gauss_perminov(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double *tA, double complex *BT, double *tBT) {
+EXPORT void solve_cholesky_naive(int n_s, int n_f, int b_s, const double complex *A, const double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *BT) {
     memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
     memset(Ah_y, 0, n_f * sizeof(double complex));
     double complex Ah_A_block[n_f * n_f];
@@ -221,8 +215,25 @@ EXPORT void solve_gauss_perminov(int n_s, int n_f, int b_s, double complex *A, d
     for (int b_start = 0; b_start < n_s; b_start += b_s) {
         int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
         PROCESS_BLOCK_PREP(b_start, curr_bs);
+        matmul_naive(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, BT);
+        #pragma GCC ivdep
+        for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
+    }
+    for(int i=0; i<n_f; i++) Ah_A[IDX(i, i, n_f)] += reg; 
+    cholesky_solve_inplace(n_f, Ah_A, Ah_y, w);
+}
+
+EXPORT void solve_gauss_perminov(int n_s, int n_f, int b_s, const double complex *A, const double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double *tA, double complex *BT, double *tBT) {
+    memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
+    memset(Ah_y, 0, n_f * sizeof(double complex));
+    double complex Ah_A_block[n_f * n_f];
+    
+    // Переходим непосредственно на переданный размер блока свитч-тестирования b_s
+    for (int b_start = 0; b_start < n_s; b_start += b_s) {
+        int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
+        PROCESS_BLOCK_PREP(b_start, curr_bs);
         
-        matmul_perminov(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, tA, BT, tBT);
+        matmul_perminov(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, BT);
         
         #pragma GCC ivdep
         for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
@@ -231,7 +242,7 @@ EXPORT void solve_gauss_perminov(int n_s, int n_f, int b_s, double complex *A, d
     gauss_solve_inplace(n_f, Ah_A, Ah_y, w, M);
 }
 
-EXPORT void solve_gauss_winograd(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double complex *rf, double complex *cf, double complex *BT) {
+EXPORT void solve_gauss_winograd(int n_s, int n_f, int b_s, const double complex *A, const double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *M, double complex *rf, double complex *cf, double complex *BT) {
     memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
     memset(Ah_y, 0, n_f * sizeof(double complex));
     double complex Ah_A_block[n_f * n_f];
@@ -249,7 +260,7 @@ EXPORT void solve_gauss_winograd(int n_s, int n_f, int b_s, double complex *A, d
     gauss_solve_inplace(n_f, Ah_A, Ah_y, w, M);
 }
 
-EXPORT void solve_cholesky_naive(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *BT) {
+EXPORT void solve_cholesky_perminov(int n_s, int n_f, int b_s, const double complex *A, const double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double *tA, double complex *BT, double *tBT) {
     memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
     memset(Ah_y, 0, n_f * sizeof(double complex));
     double complex Ah_A_block[n_f * n_f];
@@ -258,7 +269,7 @@ EXPORT void solve_cholesky_naive(int n_s, int n_f, int b_s, double complex *A, d
         int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
         PROCESS_BLOCK_PREP(b_start, curr_bs);
         
-        matmul_naive(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, BT);
+        matmul_perminov(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, BT);
         
         #pragma GCC ivdep
         for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
@@ -267,25 +278,7 @@ EXPORT void solve_cholesky_naive(int n_s, int n_f, int b_s, double complex *A, d
     cholesky_solve_inplace(n_f, Ah_A, Ah_y, w);
 }
 
-EXPORT void solve_cholesky_perminov(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double *tA, double complex *BT, double *tBT) {
-    memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
-    memset(Ah_y, 0, n_f * sizeof(double complex));
-    double complex Ah_A_block[n_f * n_f];
-    
-    for (int b_start = 0; b_start < n_s; b_start += b_s) {
-        int curr_bs = (b_start + b_s > n_s) ? (n_s - b_start) : b_s;
-        PROCESS_BLOCK_PREP(b_start, curr_bs);
-        
-        matmul_perminov(n_f, curr_bs, n_f, Ah, &A[IDX(b_start, 0, n_f)], Ah_A_block, tA, BT, tBT);
-        
-        #pragma GCC ivdep
-        for (int i = 0; i < n_f * n_f; i++) Ah_A[i] += Ah_A_block[i];
-    }
-    for(int i=0; i<n_f; i++) Ah_A[IDX(i, i, n_f)] += reg; 
-    cholesky_solve_inplace(n_f, Ah_A, Ah_y, w);
-}
-
-EXPORT void solve_cholesky_winograd(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *rf, double complex *cf, double complex *BT) {
+EXPORT void solve_cholesky_winograd(int n_s, int n_f, int b_s, const double complex *A, const double complex *y, double reg, double complex *w, double complex *Ah, double complex *Ah_A, double complex *Ah_y, double complex *rf, double complex *cf, double complex *BT) {
     memset(Ah_A, 0, n_f * n_f * sizeof(double complex));
     memset(Ah_y, 0, n_f * sizeof(double complex));
     double complex Ah_A_block[n_f * n_f];
@@ -303,40 +296,33 @@ EXPORT void solve_cholesky_winograd(int n_s, int n_f, int b_s, double complex *A
     cholesky_solve_inplace(n_f, Ah_A, Ah_y, w);
 }
 
-EXPORT void solve_qr_householder(int n_s, int n_f, int b_s, double complex *A, double complex *y, double reg, double complex *w, double complex *R, double complex *y_ext, double complex *v) {
-    // (b_s игнорируется, так как QR требует целостной структуры для Householder-отражений)
+// QR Householder (Оставляем без изменений)
+EXPORT void solve_qr_householder(int n_s, int n_f, int b_s, const double complex *A, const double complex *y, double reg, double complex *w, double complex *R, double complex *y_ext, double complex *v) {
+    (void)b_s;
     memset(R, 0, (n_s + n_f) * n_f * sizeof(double complex));
-    
     for(int i=0; i<n_s; i++) { 
         #pragma GCC ivdep
         for(int j=0; j<n_f; j++) R[IDX(i, j, n_f)] = A[IDX(i, j, n_f)]; 
         y_ext[i] = y[i]; 
     }
-    
-    for(int i=0; i<n_f; i++) R[IDX(n_s + i, i, n_f)] = sqrt(reg);
-    
+    for(int i=0; i<n_f; i++) R[IDX(n_s + i, i, n_f)] = csqrt(reg);
     for(int i=0; i<n_f; i++) {
         double col_norm_sq = 0; 
         #pragma GCC ivdep
         for(int j=i; j<n_s+n_f; j++) col_norm_sq += cabs(R[IDX(j, i, n_f)]) * cabs(R[IDX(j, i, n_f)]);
-        
-        double sigma = (cabs(R[IDX(i, i, n_f)]) > 0 ? (cabs(R[IDX(i, i, n_f)]) / R[IDX(i, i, n_f)]) : 1.0) * sqrt(col_norm_sq);
+        double complex sigma = (cabs(R[IDX(i, i, n_f)]) > 0 ? (R[IDX(i, i, n_f)] / cabs(R[IDX(i, i, n_f)])) : 1.0) * sqrt(col_norm_sq);
         v[0] = R[IDX(i, i, n_f)] + sigma; 
-        
         #pragma GCC ivdep
         for(int j=i+1; j<n_s+n_f; j++) v[j-i] = R[IDX(j, i, n_f)];
-        
         double v_norm_sq = 0; 
         #pragma GCC ivdep
         for(int j=0; j<n_s+n_f-i; j++) v_norm_sq += cabs(v[j]) * cabs(v[j]);
-        
         if (v_norm_sq > 1e-20) {
             for(int k=i; k<n_f; k++) {
                 double complex dot = 0; 
                 #pragma GCC ivdep
                 #pragma GCC unroll 4
                 for(int j=0; j<n_s+n_f-i; j++) dot += conj(v[j]) * R[IDX(i+j, k, n_f)];
-                
                 #pragma GCC ivdep
                 #pragma GCC unroll 4
                 for(int j=0; j<n_s+n_f-i; j++) R[IDX(i+j, k, n_f)] -= (2.0 * dot / v_norm_sq) * v[j];
@@ -344,12 +330,10 @@ EXPORT void solve_qr_householder(int n_s, int n_f, int b_s, double complex *A, d
             double complex dy = 0; 
             #pragma GCC ivdep
             for(int j=0; j<n_s+n_f-i; j++) dy += conj(v[j]) * y_ext[i+j];
-            
             #pragma GCC ivdep
             for(int j=0; j<n_s+n_f-i; j++) y_ext[i+j] -= (2.0 * dy / v_norm_sq) * v[j];
         }
     }
-    
     for(int i=n_f-1; i>=0; i--) {
         double complex s = 0; 
         #pragma GCC ivdep
